@@ -1,21 +1,13 @@
 #include "netdefhdr.h"
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <unistd.h>
 #include <netinet/in.h>
 #include <linux/types.h>
 #include <linux/netfilter.h>		/* for NF_ACCEPT */
 #include <errno.h>
-
-void dump(unsigned char *data, int size){
-	printf("EclipseMode dump\n");
-	for(int i = 0 ; i < size ; i++){
-		printf("%02x ", *data++);
-	}
-	printf("\n");
-}
-
+#include <string.h>
+#include <stdint.h>
 #include <libnetfilter_queue/libnetfilter_queue.h>
 
 /* returns packet id */
@@ -31,117 +23,102 @@ static u_int32_t print_pkt (struct nfq_data *tb, uint8_t *block_packet)
 	ph = nfq_get_msg_packet_hdr(tb);
 	if (ph) {
 		id = ntohl(ph->packet_id);
-//		printf("hw_protocol=0x%04x hook=%u id=%u ",
-//			ntohs(ph->hw_protocol), ph->hook, id);
+		printf("hw_protocol=0x%04x hook=%u id=%u ",
+			ntohs(ph->hw_protocol), ph->hook, id);
 	}
 
 	hwph = nfq_get_packet_hw(tb);
 	if (hwph) {
 		int i, hlen = ntohs(hwph->hw_addrlen);
 
-//		printf("hw_src_addr=");
-//		for (i = 0; i < hlen-1; i++)
-//			printf("%02x:", hwph->hw_addr[i]);
-//		printf("%02x ", hwph->hw_addr[hlen-1]);
+		printf("hw_src_addr=");
+		for (i = 0; i < hlen-1; i++)
+			printf("%02x:", hwph->hw_addr[i]);
+		printf("%02x ", hwph->hw_addr[hlen-1]);
 	}
 
 	mark = nfq_get_nfmark(tb);
 	if (mark)
-//		printf("mark=%u ", mark);
+		printf("mark=%u ", mark);
 
 	ifi = nfq_get_indev(tb);
 	if (ifi)
-//		printf("indev=%u ", ifi);
+		printf("indev=%u ", ifi);
 
 	ifi = nfq_get_outdev(tb);
 	if (ifi)
-//		printf("outdev=%u ", ifi);
+		printf("outdev=%u ", ifi);
 	ifi = nfq_get_physindev(tb);
 	if (ifi)
-//		printf("physindev=%u ", ifi);
+		printf("physindev=%u ", ifi);
 
 	ifi = nfq_get_physoutdev(tb);
 	if (ifi)
-//		printf("physoutdev=%u ", ifi);
+		printf("physoutdev=%u ", ifi);
 
 	ret = nfq_get_payload(tb, &data);
 	if (ret >= 0){
-//		printf("payload_len=%d ", ret);
-		memcpy(block_packet, data, ret);	
+		printf("payload_len=%d ", ret);
+		memcpy(block_packet, data, ret);
 		block_packet[ret] = '\0';
 	}
-
-//	fputc('\n', stdout);
+	if (ret >= 300) for(int i = 0 ; i < ret ; i++) printf("%.2x ",block_packet[i]);
+	printf("\n\n");
+	if (ret >= 300) for(int i = 0 ; i < ret ; i++) printf("%c ",block_packet[i]);
+	fputc('\n', stdout);
 
 	return id;
 }	
 
-int	http_checker(uint8_t *block_packet, uint8_t *http_payload){
-	uint8_t	*payload;
-	uint16_t iphdr_size, tcphdr_size;
-	int	http_flag = 1;
+int substr_checker(uint8_t *block_packet)
+{
+	int payload_flag = 0;
+	uint8_t *payload;
+	int16_t ip_size=0, tcp_size=0;
+	ip_header *iphdr;
+	tcp_header *tcphdr;
 
-	ip_header *ip_hdr;
-	tcp_header *tcp_hdr;
-
-	ip_hdr = (ip_header *)block_packet;
-	if(ip_hdr -> protocol_id == __TCP_PROTO__){
-		iphdr_size = (ip_hdr -> packet_length);
-		tcp_hdr = (tcp_header *)(block_packet + iphdr_size);
-		tcphdr_size = sizeof(ethernet_header) + iphdr_size + (tcp_hdr -> offset) * 4;
-		if((ntohs(tcp_hdr -> dst_port_num) == 80))
-			payload = block_packet + iphdr_size + tcphdr_size;
-		else http_flag = 0;
+	iphdr = (ip_header *)block_packet;
+	ip_size = ((iphdr->ver_hlen)&0xf) * 4;
+	tcphdr = (tcp_header *)(block_packet + ip_size);
+	tcp_size = (tcphdr->offset)*4;
+	printf("ip size : %d\n tcp size : %d\n",ip_size,tcp_size);
+	if(iphdr->protocol_id == __TCP_PROTO__){
+		printf("first step\n");		
+		printf("%d",ntohs(tcphdr->dst_port_num));
+		printf("\n\n");
+		if(ntohs(tcphdr->dst_port_num)==80){
+			printf("second step\n");
+			if(iphdr->packet_length - ip_size - tcp_size != 0){
+				printf("third step\n");
+				if(strstr((const char*)block_packet, "g i l g i l . n e t") != NULL){
+					printf("gilgil rule!\n");
+					return 1;
+				}
+			}
+		}
 	}
-	
-	if (!http_flag) return 0;
-	else {
-		http_payload = payload;
-		return 1;
-	}	
-}
-
-int	tcp_checker(uint8_t *block_packet){
-	ip_header 	*ip_hdr;
-	tcp_header	*tcp_hdr;
-	uint8_t *http_payload;
-	uint16_t iphdr_size, tcphdr_size;
-	int	http_flag = 0;
-	int	drop_flag = 0;
-
-	ip_hdr = (ip_header *)(block_packet + sizeof(ethernet_header));
-	iphdr_size = ip_hdr -> packet_length;
-
-	tcp_hdr = (tcp_header *)(block_packet + iphdr_size + sizeof(ethernet_header));
-	tcphdr_size = sizeof(ethernet_header) + iphdr_size + (tcp_hdr -> offset) * 4;
-
-	http_flag = http_checker(block_packet, http_payload);
-	if (!http_flag) return 0;
-	else {
-		if(strstr((const char*)http_payload, "www.gilgil.net/test") != NULL) return 1;
-		else return 0;
-	}
+	printf("your checker is fuck!\n");
+	return 0;
 }
 
 static int cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
 	      struct nfq_data *nfa, void *data)
 {
-	uint8_t* block_packet;	// MAX MTU LENGTH : 1500 : defined in netdefhdr.h
-	u_int32_t id = print_pkt(nfa,block_packet);
-	int tcp_checker_flag = tcp_checker(block_packet);
+	uint8_t block_packet[__MAX_MTU__];
+	u_int32_t id = print_pkt(nfa, block_packet);
 	printf("entering callback\n");
-	if(tcp_checker_flag) {
-		dump(block_packet,20);
+	if(substr_checker(block_packet))
 		return nfq_set_verdict(qh, id, NF_DROP, 0, NULL);
-	}
-	else return nfq_set_verdict(qh, id, NF_ACCEPT, 0, NULL);
+	else
+		return nfq_set_verdict(qh, id, NF_ACCEPT, 0, NULL);
 }
 
 int main(int argc, char **argv)
 {
 	struct nfq_handle *h;
 	struct nfq_q_handle *qh;
-	struct nfnl_handle *nh;
+	// struct nfnl_handle *nh;
 	int fd;
 	int rv;
 	char buf[4096] __attribute__ ((aligned));
