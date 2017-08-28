@@ -11,7 +11,7 @@
 #include <libnetfilter_queue/libnetfilter_queue.h>
 
 /* returns packet id */
-static u_int32_t print_pkt (struct nfq_data *tb, uint8_t *block_packet)
+static u_int32_t print_pkt (struct nfq_data *tb, uint8_t *block_packet, int length[])
 {
 	int id = 0;
 	struct nfqnl_msg_packet_hdr *ph;
@@ -57,22 +57,21 @@ static u_int32_t print_pkt (struct nfq_data *tb, uint8_t *block_packet)
 		printf("physoutdev=%u ", ifi);
 
 	ret = nfq_get_payload(tb, &data);
+	length[0] = ret;
 	if (ret >= 0){
 		printf("payload_len=%d ", ret);
 		memcpy(block_packet, data, ret);
 		block_packet[ret] = '\0';
 	}
-	if (ret >= 300) for(int i = 0 ; i < ret ; i++) printf("%.2x ",block_packet[i]);
-	printf("\n\n");
-	if (ret >= 300) for(int i = 0 ; i < ret ; i++) printf("%c ",block_packet[i]);
 	fputc('\n', stdout);
 
 	return id;
 }	
 
-int substr_checker(uint8_t *block_packet)
+int substr_checker(uint8_t *block_packet,int size[])
 {
 	int payload_flag = 0;
+	const char* gilgil = "gilgil.net";
 	uint8_t *payload;
 	int16_t ip_size=0, tcp_size=0;
 	ip_header *iphdr;
@@ -85,20 +84,21 @@ int substr_checker(uint8_t *block_packet)
 	printf("ip size : %d\n tcp size : %d\n",ip_size,tcp_size);
 	if(iphdr->protocol_id == __TCP_PROTO__){
 		printf("first step\n");		
-		printf("%d",ntohs(tcphdr->dst_port_num));
-		printf("\n\n");
+		printf("tcp port num : %d\n",ntohs(tcphdr->dst_port_num));
 		if(ntohs(tcphdr->dst_port_num)==80){
 			printf("second step\n");
 			if(iphdr->packet_length - ip_size - tcp_size != 0){
 				printf("third step\n");
-				if(strstr((const char*)block_packet, "g i l g i l . n e t") != NULL){
+				for(int i = 0 ; i < size[0] ; i++) printf("%c",block_packet[i]);
+				printf("\n");
+				if(strstr((const char *)block_packet,"gilgil") != NULL){
 					printf("gilgil rule!\n");
 					return 1;
 				}
 			}
 		}
 	}
-	printf("your checker is fuck!\n");
+	printf("Failed to detect\n\n");
 	return 0;
 }
 
@@ -106,9 +106,10 @@ static int cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
 	      struct nfq_data *nfa, void *data)
 {
 	uint8_t block_packet[__MAX_MTU__];
-	u_int32_t id = print_pkt(nfa, block_packet);
+	int length[1];
+	u_int32_t id = print_pkt(nfa, block_packet,length);
 	printf("entering callback\n");
-	if(substr_checker(block_packet))
+	if(substr_checker(block_packet, length))
 		return nfq_set_verdict(qh, id, NF_DROP, 0, NULL);
 	else
 		return nfq_set_verdict(qh, id, NF_ACCEPT, 0, NULL);
